@@ -107,9 +107,15 @@
     </style>
     <script type="module">
         // Firebase Configuration
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = {
+  apiKey: "AIzaSyCCGfV86oh0UIz-WNACqOjkP2RA3OZ_7dg",
+  authDomain: "jajak-together.firebaseapp.com",
+  projectId: "jajak-together",
+  storageBucket: "jajak-together.firebasestorage.app",
+  messagingSenderId: "32265837626",
+  appId: "1:32265837626:web:49c02619b9836e64a0a903",
+  measurementId: "G-1R97CQYLTT"
+};
 
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
