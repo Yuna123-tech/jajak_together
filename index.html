@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>협력 게임: 폭탄 해체 미션</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e;
+            color: #e8e8e8;
+            transition: background-color 0.5s ease;
+        }
+        .container {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+        }
+        .card {
+            background-color: #2e2e42;
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+            max-width: 90%;
+            width: 500px;
+        }
+        input, button, select {
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: none;
+            width: 100%;
+            font-size: 1rem;
+            background-color: #1a1a2e;
+            color: #e8e8e8;
+            outline: none;
+        }
+        button {
+            background-color: #e84545;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #d13232;
+        }
+        .text-neon {
+            color: #a3ff00;
+            text-shadow: 0 0 5px #a3ff00, 0 0 10px #a3ff00;
+        }
+        .loading-spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .success-bg {
+            background-color: #0d3810;
+        }
+        .fail-bg {
+            background-color: #3b0e0e;
+        }
+        .map-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2px;
+        }
+        .map-cell {
+            width: 48px;
+            height: 48px;
+            background-color: #1a1a2e;
+            border: 1px solid #4f516d;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+        }
+        .hint-item {
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            background-color: #4f516d;
+        }
+    </style>
+    <script type="module">
+        // Firebase Configuration
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, updateDoc, getDoc, collection, serverTimestamp, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        let app, db, auth;
+        let isAuthReady = false;
+
+        const initFirebase = async () => {
+            try {
+                if (Object.keys(firebaseConfig).length > 0) {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    onAuthStateChanged(auth, async (user) => {
+                        if (!user) {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        }
+                        isAuthReady = true;
+                        router();
+                    });
+                } else {
+                    console.error('Firebase config is not set. The app will run in a limited, non-collaborative mode.');
+                    isAuthReady = true;
+                    router();
+                }
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        };
+
+        const appContainer = document.getElementById('app');
+
+        const render = (view) => {
+            appContainer.innerHTML = '';
+            appContainer.appendChild(view);
+        };
+
+        // UI for modals (instead of alert)
+        const createModal = (message, type) => {
+            const modal = document.createElement('dialog');
+            modal.className = `fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900 bg-opacity-75 rounded-lg shadow-lg`;
+            modal.innerHTML = `
+                <div class="bg-gray-800 p-6 rounded-lg text-center space-y-4 max-w-sm w-full">
+                    <p class="text-xl font-bold ${type === 'success' ? 'text-green-400' : 'text-red-400'}">${message}</p>
+                    <button class="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-lg" onclick="this.closest('dialog').close()">닫기</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.showModal();
+        };
+
+        // Helper for shuffling arrays
+        const shuffleArray = (array) => {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        };
+
+        // --- Views ---
+        const createLandingView = () => {
+            const view = document.createElement('div');
+            view.className = 'container';
+            view.innerHTML = `
+                <div class="card text-center space-y-4">
+                    <h1 class="text-3xl font-bold text-neon">폭탄 해체 미션</h1>
+                    <p class="text-lg">혼자서는 폭탄을 해체할 수 없습니다. 모둠원과 협력하여 코드를 완성하세요!</p>
+                    <div class="space-y-2 pt-4">
+                        <button id="start-teacher-btn">새 미션 시작 (선생님)</button>
+                        <p class="text-sm opacity-70">학생들은 입장 코드를 입력하여 참여합니다.</p>
+                        <input type="text" id="join-code-input" placeholder="입장 코드 입력 (예: ABCDEF)" class="mt-4 uppercase">
+                        <button id="join-game-btn">게임 참여하기</button>
+                    </div>
+                </div>
+            `;
+            view.querySelector('#start-teacher-btn').onclick = () => {
+                if (isAuthReady) {
+                    render(createTeacherSetupView());
+                } else {
+                    const button = view.querySelector('#start-teacher-btn');
+                    button.innerHTML = '<div class="loading-spinner mx-auto"></div>';
+                }
+            };
+            view.querySelector('#join-game-btn').onclick = async () => {
+                const joinCode = view.querySelector('#join-code-input').value.trim().toUpperCase();
+                if (joinCode.length !== 6) {
+                    createModal('입장 코드는 6자리여야 합니다.', 'error');
+                    return;
+                }
+                if (isAuthReady) {
+                    const q = query(collection(db, `/artifacts/${appId}/public/data/games`), where("joinCode", "==", joinCode));
+                    const querySnapshot = await getDocs(q);
+                    if (querySnapshot.empty) {
+                        createModal('유효하지 않은 입장 코드입니다.', 'error');
+                    } else {
+                        const gameDoc = querySnapshot.docs[0];
+                        const gameId = gameDoc.id;
+                        window.location.href = `${window.location.origin}${window.location.pathname}?gameId=${gameId}&joinCode=${joinCode}`;
+                    }
+                }
+            };
+            return view;
+        };
+
+        const createTeacherSetupView = () => {
+            const view = document.createElement('div');
+            view.className = 'container';
+            view.innerHTML = `
+                <div class="card text-center space-y-4">
+                    <h2 class="text-2xl font-bold text-neon">미션 설정</h2>
+                    <p class="text-sm opacity-80">갈등을 해결하고 폭탄을 해체하세요!</p>
+                    <div class="space-y-2">
+                        <label for="difficulty-select" class="block text-left font-medium">난이도 선택</label>
+                        <select id="difficulty-select">
+                            <option value="easy">쉬움 (가짜 단서)</option>
+                            <option value="medium">보통 (모순된 지도)</option>
+                            <option value="hard">어려움 (충돌하는 암호)</option>
+                        </select>
+                    </div>
+                    <div class="space-y-2">
+                        <label for="password-input" class="block text-left font-medium">해체 코드 (4자리 숫자/단어)</label>
+                        <input type="text" id="password-input" placeholder="예: 4217" class="p-2 rounded-lg" maxlength="4">
+                    </div>
+                    <button id="start-game-btn">미션 시작</button>
+                    <div id="game-info" class="space-y-4 hidden">
+                        <h3 class="text-xl font-bold text-neon pt-4">입장 코드: <span id="join-code" class="text-white text-3xl"></span></h3>
+                        <p class="text-sm opacity-70">학생들에게 입장 코드를 알려주세요. 각자 자동으로 모둠이 배정됩니다.</p>
+                    </div>
+                    <div id="game-status-container" class="space-y-4 hidden">
+                        <h3 class="text-xl font-bold text-neon pt-4">미션 현황</h3>
+                        <div id="teams-status-list" class="space-y-4 text-left"></div>
+                    </div>
+                </div>
+            `;
+
+            const passwordInput = view.querySelector('#password-input');
+            const difficultySelect = view.querySelector('#difficulty-select');
+            const startGameBtn = view.querySelector('#start-game-btn');
+            const gameInfoContainer = view.querySelector('#game-info');
+            const joinCodeSpan = view.querySelector('#join-code');
+            const gameStatusContainer = view.querySelector('#game-status-container');
+            const teamsStatusList = view.querySelector('#teams-status-list');
+            
+            difficultySelect.onchange = () => {
+                const difficulty = difficultySelect.value;
+                if (difficulty === 'easy' || difficulty === 'medium') {
+                    passwordInput.placeholder = "예: 4217";
+                    passwordInput.maxLength = 4;
+                    passwordInput.type = "text";
+                } else if (difficulty === 'hard') {
+                    passwordInput.placeholder = "예: 단어4자리";
+                    passwordInput.maxLength = 4;
+                    passwordInput.type = "text";
+                }
+            };
+            
+            startGameBtn.onclick = async () => {
+                const difficulty = difficultySelect.value;
+                const password = passwordInput.value.trim();
+                if (password.length !== 4) {
+                    createModal('해체 코드는 4자리여야 합니다.', 'error');
+                    return;
+                }
+                const gameId = Math.random().toString(36).substring(2, 8);
+                const joinCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const gameDocRef = doc(db, `/artifacts/${appId}/public/data/games`, gameId);
+                
+                try {
+                    startGameBtn.disabled = true;
+                    startGameBtn.textContent = '미션 생성 중...';
+
+                    await setDoc(gameDocRef, {
+                        joinCode,
+                        difficulty,
+                        password,
+                        players: [],
+                        lastUpdated: serverTimestamp()
+                    });
+
+                    startGameBtn.classList.add('hidden');
+                    gameInfoContainer.classList.remove('hidden');
+                    gameStatusContainer.classList.remove('hidden');
+                    joinCodeSpan.textContent = joinCode;
+
+                    onSnapshot(gameDocRef, (docSnap) => {
+                        if (docSnap.exists()) {
+                            const gameData = docSnap.data();
+                            const players = gameData.players || [];
+                            const teams = {};
+                            players.forEach(p => {
+                                if (!teams[p.teamId]) teams[p.teamId] = { solved: false, lastAttempt: null, players: [] };
+                                teams[p.teamId].players.push(p);
+                                if(p.solved) teams[p.teamId].solved = true;
+                                if(p.lastAttempt) teams[p.teamId].lastAttempt = p.lastAttempt;
+                            });
+
+                            teamsStatusList.innerHTML = '';
+                            Object.keys(teams).sort().forEach(teamId => {
+                                const team = teams[teamId];
+                                const statusClass = team.solved ? 'text-green-400' : 'text-red-400';
+                                teamsStatusList.innerHTML += `
+                                    <div class="p-4 border border-gray-600 rounded-lg">
+                                        <h4 class="font-bold">모둠 ${teamId}</h4>
+                                        <p>상태: <span class="${statusClass}">${team.solved ? '미션 성공!' : '진행 중...'}</span></p>
+                                        <p>최근 시도: ${team.lastAttempt || '없음'}</p>
+                                        <div class="mt-2 text-sm opacity-80">
+                                            참여 학생: ${team.players.map(p => `학생 ${p.playerIndex + 1}`).join(', ')}
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                        }
+                    });
+                } catch (error) {
+                    console.error("Error creating game:", error);
+                    createModal("게임 생성 중 오류가 발생했습니다.", 'error');
+                    startGameBtn.disabled = false;
+                    startGameBtn.textContent = '미션 시작';
+                }
+            };
+            return view;
+        };
+
+        const createPlayerView = (gameId, joinCode) => {
+            const view = document.createElement('div');
+            view.className = 'container';
+            view.innerHTML = `
+                <div class="card text-center space-y-4">
+                    <h2 class="text-2xl font-bold text-neon">폭탄 해체 미션</h2>
+                    <p class="text-lg">입장 코드: <span class="text-neon">${joinCode}</span></p>
+                    <div id="player-status" class="space-y-2 hidden">
+                        <p class="text-lg">당신은 <span id="team-info" class="text-neon"></span>의 일원입니다.</p>
+                        <p class="text-lg">혼란 속에서 진실을 찾아 폭탄을 해체하세요!</p>
+                    </div>
+                    <div id="player-hint-container" class="p-4 rounded-lg bg-[#1a1a2e] my-4 hidden">
+                        <p class="text-lg font-bold" id="hint-label">당신에게 주어진 단서:</p>
+                        <div id="hint-content" class="text-5xl font-bold mt-2 text-white overflow-x-auto"></div>
+                    </div>
+                    <div class="space-y-2 hidden" id="input-container">
+                        <label for="team-answer-input" class="block text-left font-medium">모둠원들과 협력하여 해체 코드를 입력하세요.</label>
+                        <input type="text" id="team-answer-input" placeholder="전체 4자리 코드" maxlength="4" class="uppercase">
+                    </div>
+                    <button id="submit-answer-btn" class="hidden">코드 입력</button>
+                    <button id="join-team-btn" class="mt-4">게임에 참여하기</button>
+                    <p id="result-message" class="font-bold mt-4"></p>
+                </div>
+            `;
+
+            const hintContent = view.querySelector('#hint-content');
+            const teamAnswerInput = view.querySelector('#team-answer-input');
+            const submitBtn = view.querySelector('#submit-answer-btn');
+            const resultMessage = view.querySelector('#result-message');
+            const joinTeamBtn = view.querySelector('#join-team-btn');
+            const playerStatusDiv = view.querySelector('#player-status');
+            const hintContainer = view.querySelector('#player-hint-container');
+            const inputContainer = view.querySelector('#input-container');
+            const hintLabel = view.querySelector('#hint-label');
+
+            const gameDocRef = doc(db, `/artifacts/${appId}/public/data/games`, gameId);
+            let assignedTeamId = null;
+            let assignedPlayerIndex = null;
+            
+            const generateEasyHint = (password, playerIndex) => {
+                const correctChar = password[playerIndex];
+                const otherChars = password.split('').filter((_, i) => i !== playerIndex);
+                let fakeChars = [];
+                while (fakeChars.length < 2) {
+                    const randomChar = Math.floor(Math.random() * 10).toString();
+                    if (randomChar !== correctChar && !otherChars.includes(randomChar) && !fakeChars.includes(randomChar)) {
+                        fakeChars.push(randomChar);
+                    }
+                }
+                const hintArray = [correctChar, ...fakeChars];
+                shuffleArray(hintArray);
+                return hintArray.join(', ');
+            };
+
+            const generateMediumHint = (playerIndex) => {
+                const baseMap = [
+                    ['S', 'P', 'Z', 'P'],
+                    ['P', 'Z', 'P', 'P'],
+                    ['P', 'P', 'P', 'Z'],
+                    ['P', 'P', 'E', 'P']
+                ];
+                const conflictingMap = [
+                    ['P', 'S', 'P', 'Z'],
+                    ['P', 'P', 'P', 'P'],
+                    ['Z', 'P', 'Z', 'P'],
+                    ['P', 'E', 'P', 'P']
+                ];
+                const playerMap = Array.from({length: 4}, () => Array(4).fill(' '));
+                const mapToUse = playerIndex % 2 === 0 ? baseMap : conflictingMap;
+                const startRow = Math.floor(playerIndex / 2) * 2;
+                const startCol = (playerIndex % 2) * 2;
+                for(let i=0; i<2; i++) {
+                    for(let j=0; j<2; j++) {
+                        playerMap[i + startRow][j + startCol] = mapToUse[i + startRow][j + startCol];
+                    }
+                }
+                return playerMap;
+            };
+
+            const generateHardHint = (password, playerIndex) => {
+                const hints = [
+                    `단서 1: 해체 코드의 ${password[0]}번째 글자는 '${password[0]}'입니다.`,
+                    `단서 2: 해체 코드의 첫 글자는 '${password[1]}'입니다.`, // Conflicting
+                    `단서 3: 해체 코드의 ${password[2]}번째 글자는 '${password[2]}'입니다.`,
+                    `단서 4: 해체 코드의 세 번째 글자는 '${password[3]}'입니다.` // Conflicting
+                ];
+                return hints[playerIndex];
+            };
+
+            const renderHint = (difficulty, hint) => {
+                if (difficulty === 'easy') {
+                    hintLabel.textContent = `당신에게 주어진 단서 (진실과 거짓이 섞여 있습니다):`;
+                    hintContent.innerHTML = `<div class="flex justify-center space-x-2">${hint.split(',').map(h => `<div class="hint-item">${h}</div>`).join('')}</div>`;
+                } else if (difficulty === 'medium') {
+                    hintLabel.textContent = `당신에게 주어진 지도 조각 (팀원의 조각과 충돌할 수 있습니다):`;
+                    const mapGrid = document.createElement('div');
+                    mapGrid.className = 'map-grid';
+                    for (let i = 0; i < 4; i++) {
+                        for (let j = 0; j < 4; j++) {
+                            const cell = document.createElement('div');
+                            cell.className = 'map-cell';
+                            if (hint[i][j] === 'S') cell.innerHTML = '🚶';
+                            if (hint[i][j] === 'E') cell.innerHTML = '🚪';
+                            if (hint[i][j] === 'Z') cell.innerHTML = '🧟';
+                            if (hint[i][j] === 'P') cell.innerHTML = '✅';
+                            mapGrid.appendChild(cell);
+                        }
+                    }
+                    hintContent.innerHTML = '';
+                    hintContent.appendChild(mapGrid);
+                } else if (difficulty === 'hard') {
+                    hintLabel.textContent = `당신에게 주어진 단서 (정답은 단 하나!):`;
+                    hintContent.innerHTML = `<div class="text-lg font-normal break-words whitespace-pre-wrap">${hint}</div>`;
+                }
+            };
+
+            joinTeamBtn.onclick = async () => {
+                try {
+                    joinTeamBtn.disabled = true;
+                    joinTeamBtn.textContent = '참여 중...';
+                    const docSnap = await getDoc(gameDocRef);
+                    if (!docSnap.exists()) {
+                        createModal('게임을 찾을 수 없습니다. 입장 코드를 다시 확인하세요.', 'error');
+                        joinTeamBtn.disabled = false;
+                        joinTeamBtn.textContent = '게임에 참여하기';
+                        return;
+                    }
+
+                    const gameData = docSnap.data();
+                    const players = gameData.players || [];
+                    let assigned = false;
+                    for (let t = 1; t <= 4; t++) {
+                        const teamPlayers = players.filter(p => p.teamId === t);
+                        if (teamPlayers.length < 4) {
+                            assignedTeamId = t;
+                            assignedPlayerIndex = teamPlayers.length;
+                            const newPlayer = {
+                                userId: auth.currentUser.uid,
+                                teamId: assignedTeamId,
+                                playerIndex: assignedPlayerIndex,
+                                solved: false
+                            };
+                            
+                            if (gameData.difficulty === 'easy') {
+                                newPlayer.hint = generateEasyHint(gameData.password, assignedPlayerIndex);
+                            } else if (gameData.difficulty === 'medium') {
+                                newPlayer.hint = generateMediumHint(assignedPlayerIndex);
+                            } else if (gameData.difficulty === 'hard') {
+                                newPlayer.hint = generateHardHint(gameData.password, assignedPlayerIndex);
+                            }
+
+                            players.push(newPlayer);
+                            await updateDoc(gameDocRef, { players });
+                            assigned = true;
+                            break;
+                        }
+                    }
+
+                    if (!assigned) {
+                        createModal('모든 팀의 정원이 가득 찼습니다. 다른 팀에 참여하세요.', 'error');
+                        joinTeamBtn.disabled = false;
+                        joinTeamBtn.textContent = '게임에 참여하기';
+                        return;
+                    }
+                    
+                    joinTeamBtn.classList.add('hidden');
+                    playerStatusDiv.classList.remove('hidden');
+                    hintContainer.classList.remove('hidden');
+                    inputContainer.classList.remove('hidden');
+                    submitBtn.classList.remove('hidden');
+                    view.querySelector('#team-info').textContent = `모둠 ${assignedTeamId}의 학생 ${assignedPlayerIndex + 1}`;
+                    
+                } catch (error) {
+                    console.error("Error joining team:", error);
+                    createModal("게임 참여 중 오류가 발생했습니다.", 'error');
+                    joinTeamBtn.disabled = false;
+                    joinTeamBtn.textContent = '게임에 참여하기';
+                }
+            };
+
+            onSnapshot(gameDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const gameData = docSnap.data();
+                    const player = (gameData.players || []).find(p => p.userId === auth.currentUser.uid);
+                    
+                    if (player) {
+                        renderHint(gameData.difficulty, player.hint);
+
+                        if (player.solved) {
+                            resultMessage.textContent = '축하합니다! 모둠이 성공적으로 미션을 완수했습니다!';
+                            resultMessage.className = 'text-green-400 font-bold mt-4';
+                            submitBtn.disabled = true;
+                            teamAnswerInput.disabled = true;
+                            document.body.classList.add('success-bg');
+                        } else if (player.lastAttempt !== null && !player.solved) {
+                            document.body.classList.add('fail-bg');
+                            setTimeout(() => {
+                                document.body.classList.remove('fail-bg');
+                            }, 1000);
+                        }
+                    }
+                }
+            }, (error) => {
+                console.error("Error getting game data:", error);
+                createModal('게임 정보를 불러오는 데 실패했습니다.', 'error');
+            });
+
+            submitBtn.onclick = async () => {
+                const submittedAnswer = teamAnswerInput.value.trim().toUpperCase();
+                if (submittedAnswer.length !== 4) {
+                    createModal('코드는 4자리여야 합니다.', 'error');
+                    return;
+                }
+
+                submitBtn.disabled = true;
+                submitBtn.textContent = '확인 중...';
+
+                try {
+                    const docSnap = await getDoc(gameDocRef);
+                    if (docSnap.exists()) {
+                        const gameData = docSnap.data();
+                        const correctPassword = gameData.password.toUpperCase();
+                        const isCorrect = submittedAnswer === correctPassword;
+
+                        if (isCorrect) {
+                            resultMessage.textContent = '성공! 폭탄 해체에 성공했습니다!';
+                            resultMessage.className = 'text-green-400 font-bold mt-4';
+                        } else {
+                            resultMessage.textContent = '실패! 코드가 틀렸습니다. 다시 시도하세요.';
+                            resultMessage.className = 'text-red-400 font-bold mt-4';
+                        }
+                        
+                        const players = gameData.players.map(p => {
+                            if (p.userId === auth.currentUser.uid) {
+                                return { ...p, solved: isCorrect, lastAttempt: submittedAnswer };
+                            }
+                            return p;
+                        });
+
+                        await updateDoc(gameDocRef, { players });
+                    }
+                } catch (error) {
+                    console.error("Error submitting answer:", error);
+                    createModal('코드 제출 중 오류가 발생했습니다.', 'error');
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '코드 입력';
+                }
+            };
+            return view;
+        };
+
+        const router = () => {
+            const params = new URLSearchParams(window.location.search);
+            const gameId = params.get('gameId');
+            const joinCode = params.get('joinCode');
+
+            if (gameId && joinCode) {
+                render(createPlayerView(gameId, joinCode));
+            } else {
+                render(createLandingView());
+            }
+        };
+
+        initFirebase();
+    </script>
+</head>
+<body>
+    <div id="app"></div>
+</body>
+</html>
